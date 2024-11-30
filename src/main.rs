@@ -26,8 +26,15 @@ enum Commands {
     },
     Redeem {
         name: String,
+
         #[arg(long)]
         input: Option<String>,
+
+        #[arg(long)]
+        period: Option<u64>,
+
+        #[arg(long)]
+        count: Option<usize>,
     },
 }
 
@@ -98,7 +105,21 @@ async fn login() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-async fn redeem(name: String, input: Option<String>) -> Result<(), Box<dyn std::error::Error>> {
+async fn send_redeem_post(name: String, input: String, client: reqwest::Client) -> Result<reqwest::Response, reqwest::Error> {
+    let form = reqwest::multipart::Form::new()
+        .text("name", name.to_string())
+        .text("input", input.to_string());
+
+    let response = client
+        .post("https://secure.colonq.computer/api/redeem")
+        .multipart(form)
+        .send()
+        .await?;
+
+    Ok(response)
+}
+
+async fn redeem(name: String, input: Option<String>, period: Option<u64>, count: Option<usize>) -> Result<(), Box<dyn std::error::Error>> {
     let base_dirs = BaseDirs::new().unwrap();
     let mut auth_path = PathBuf::from(base_dirs.home_dir());
     auth_path.push(".clonk/auth");
@@ -109,20 +130,33 @@ async fn redeem(name: String, input: Option<String>) -> Result<(), Box<dyn std::
 
     jar.set_cookies(&mut std::iter::once(&HeaderValue::from_str(&auth_data.cookies).unwrap()), &"https://secure.colonq.computer".parse().unwrap());
 
-    let form = reqwest::multipart::Form::new()
-        .text("name", name)
-        .text("input", input.unwrap_or_else(|| "undefined".to_string()));
+    let input = input.unwrap_or_else(|| "undefined".to_string());
 
-    let response = client
-        .post("https://secure.colonq.computer/api/redeem")
-        .multipart(form)
-        .send()
-        .await?;
-    if response.status().is_success() {
-        println!("Successfully redeemed");
+    if let (Some(period), Some(count)) = (period, count) {
+        let mut handles = Vec::with_capacity(count);
+
+        for _ in 0..count {
+            handles.push(tokio::spawn(send_redeem_post(name.clone(), input.clone(), client.clone())));
+            tokio::time::sleep(tokio::time::Duration::from_millis(period)).await;
+        }
+
+        // Make sure all requests were sent before leaving this scope
+        for h in handles {
+            let _ = h.await;
+        }
+
+        // In "spamming mode" (pending better name), ignore failled requests
         Ok(())
-    } else {
-        Err(format!("Failed to redeem: {}", response.status()).into())
+    }
+    else {
+        let response = send_redeem_post(name.clone(), input.clone(), client.clone()).await?;
+
+        if response.status().is_success() {
+            println!("Successfully redeemed");
+            Ok(())
+        } else {
+            Err(format!("Failed to redeem: {}", response.status()).into())
+        }
     }
 }
 
@@ -134,7 +168,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Commands::Auth { action } => match action {
             AuthCommands::Login => login().await?,
         },
-        Commands::Redeem { name, input } => redeem(name, input).await?,
+        Commands::Redeem { name, input, period, count } => redeem(name, input, period, count).await?,
     }
 
     Ok(())
