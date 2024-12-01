@@ -23,3 +23,10 @@ clonk redeem <api_name> [--input "input"]
 ```
 
 This will redeem the specified API with the given input (if required).
+
+### Repeating redeem
+
+If (for some reason) you need to send some message repeatedly, you can use special parameters `--period` and `--count`:
+```bash
+clonk redeem <api_name> --period <ms> --count <n> [--input "input"]
+```
